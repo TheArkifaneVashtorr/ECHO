@@ -1,0 +1,18 @@
+--> Staging snapshots in: /home/dalhaka/ECHO_Snapshots
+--> Generating system state snapshot for server...
+--> Output will be saved to: /home/dalhaka/ECHO_Snapshots/system/system_snapshot_server_20250626_010001.md
+--> System snapshot generation complete.
+
+--> Auto-detected single rclone remote: googledrive_snapshots
+--> Performing local garbage collection and cloud synchronization...
+2025/06/26 01:00:05 INFO  : system_snapshot_server_20250626_010001.md: Copied (new)
+2025/06/26 01:00:06 INFO  : system_snapshot_server_20250625_015043.md: Deleted
+2025/06/26 01:00:06 INFO  : 
+Transferred:   	  151.272 KiB / 151.272 KiB, 100%, 50.422 KiB/s, ETA 0s
+Checks:                 5 / 5, 100%, Listed 10
+Deleted:                1 (files), 0 (dirs), 151.311 KiB (freed)
+Transferred:            1 / 1, 100%
+Elapsed time:         4.1s
+
+--> Synchronization complete.
+--> Snapshot process finished.
