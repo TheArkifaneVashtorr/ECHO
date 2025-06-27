@@ -1,0 +1,45 @@
+# .github/workflows/generate-checksum.yml
+
+name: Generate and Commit Checksum
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'echo.sh' # This workflow only runs if echo.sh has been changed
+
+jobs:
+  update-checksum:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate SHA256 checksum
+        run: |
+          # Generate the new checksum for the script
+          sha256sum echo.sh > echo.sh.sha256
+          echo "Generated new checksum file."
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Commit and push if checksum has changed
+        run: |
+          # Add the potentially changed checksum file to the staging area
+          git add echo.sh.sha256
+          
+          # Check if there are any changes to commit.
+          # The "git diff --staged --quiet" command will exit with 1 if there are staged changes, and 0 otherwise.
+          # The "!" inverts the exit code, so the block runs if there are changes.
+          if ! git diff --staged --quiet; then
+            echo "Checksum has changed. Committing and pushing..."
+            git commit -m "chore(ci): Add automated checksum generation"
+            git push
+          else
+            echo "Checksum has not changed. No commit needed."
+          fi
