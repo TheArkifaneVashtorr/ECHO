@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# ECHO (Executable Contextual Host Output) | Version 3.4 (Test Release)
+# ECHO (Executable Contextual Host Output) | Version 3.5 (Patched)
 # ...
 # Change Log:
+#  - v3.5: Corrected logic for project change detection. Now compares against
+#          the *previous* system snapshot, not the current one.
 #  - v3.4: Test release to validate E2E deployment.
 #  - v3.3: Added up-front dependency checks to prevent silent failures.
 #          Updater logic now requires checksum verification.
@@ -139,7 +141,10 @@ SYSTEM_OUTPUT_FILE="$SYSTEM_SNAPSHOT_DIR/system_snapshot_${HOSTNAME}_${TIMESTAMP
 CACHE_FILE="$CACHE_DIR/.echo_cache"
 touch "$CACHE_FILE"
 
-LAST_SNAPSHOT_FILE=$(ls -1t "$SYSTEM_SNAPSHOT_DIR"/system_snapshot_*.md 2>/dev/null | head -n 1)
+# *** LOGIC CORRECTION ***
+# Get the *second to last* snapshot to use as the comparison point for changes.
+# This ensures we are comparing against the state *before* this run started.
+LAST_SNAPSHOT_FILE=$(ls -1t "$SYSTEM_SNAPSHOT_DIR"/system_snapshot_*.md 2>/dev/null | head -n 2 | tail -n 1)
 LAST_SNAPSHOT_MTIME=0
 if [ -f "$LAST_SNAPSHOT_FILE" ]; then
     LAST_SNAPSHOT_MTIME=$(stat -c %Y "$LAST_SNAPSHOT_FILE")
