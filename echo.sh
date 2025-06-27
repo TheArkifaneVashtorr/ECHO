@@ -1,17 +1,70 @@
 #!/bin/bash
 
 # ==============================================================================
-# ECHO (Executable Contextual Host Output) | Version 2.6 (Stable)
+# ECHO (Executable Contextual Host Output) | Version 3.2 (Resilient & Autonomous)
 #
 # Author: TheArkifaneVashtorr & Janus.v4
-# Purpose: To capture a comprehensive snapshot of a system's state for
-#          archiving, analysis, and providing context to collaborators.
+# Purpose: To capture a comprehensive snapshot of a system's state and to
+#          autonomously keep itself updated from a central repository.
+# Change Log:
+#  - v3.2: Implemented semantic version checking to prevent downgrade attacks.
 # ==============================================================================
 
-# --- Configuration ---
+# --- Autonomous Update Bootstrap ---
+ECHO_REPO_URL="https://raw.githubusercontent.com/TheArkifaneVashtorr/ECHO/main/echo.sh"
+
+log_update() {
+    # Logs an update-related message with a timestamp. Redirects stdout to stderr.
+    echo "[ECHO-Updater] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
+}
+
+# Extract the version number from a script file's header.
+get_version_from_string() {
+    echo "$1" | grep -o 'Version [0-9.]*' | awk '{print $2}'
+}
+
+# The full path to this script and its updater companion.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+UPDATER_SCRIPT_PATH="${SCRIPT_DIR}/update-echo.sh"
+
+# Get Local Version from this script's own header.
+LOCAL_VERSION=$(get_version_from_string "$(head -n 10 "$0")")
+
+# Fetch remote version (only if curl is available)
+if command -v curl &> /dev/null; then
+    REMOTE_VERSION_CONTENT=$(curl -s -L "${ECHO_REPO_URL}" | head -n 10)
+    REMOTE_VERSION=$(get_version_from_string "$REMOTE_VERSION_CONTENT")
+
+    # Proceed only if both versions were successfully parsed
+    if [[ -n "$LOCAL_VERSION" && -n "$REMOTE_VERSION" ]]; then
+        
+        # Determine the highest version number using a version-aware sort
+        HIGHEST_VERSION=$(printf "%s\n%s" "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n 1)
+
+        # Only trigger an update if the highest version is NOT our local version
+        # AND the remote version is the highest version. This prevents downgrades.
+        if [[ "$HIGHEST_VERSION" != "$LOCAL_VERSION" && "$HIGHEST_VERSION" == "$REMOTE_VERSION" ]]; then
+            log_update "Newer version detected. Local: ${LOCAL_VERSION}, Remote: ${REMOTE_VERSION}. Update required."
+            if [ -x "$UPDATER_SCRIPT_PATH" ]; then
+                log_update "Handing off to external updater at ${UPDATER_SCRIPT_PATH}."
+                # Execute updater in the background and exit immediately.
+                "$UPDATER_SCRIPT_PATH" &
+                exit 0
+            else
+                log_update "ERROR: Updater script not found or not executable at ${UPDATER_SCRIPT_PATH}. Cannot self-update."
+            fi
+        fi
+    fi
+else
+    log_update "WARNING: 'curl' command not found. Skipping version check."
+fi
+# --- End of Autonomous Update Bootstrap ---
+
+
+# --- Configuration (Original from v2.6) ---
 SNAPSHOT_RETENTION_COUNT=5
 
-# --- Function Definitions ---
+# --- Function Definitions (Original from v2.6) ---
 write_command_output() {
     local cmd_string="$1"
     local header_text="$2"
@@ -53,7 +106,7 @@ select_rclone_remote() {
     fi
 }
 
-# --- Dynamic Path Configuration ---
+# --- Dynamic Path Configuration (Original from v2.6) ---
 if [ -n "$DISPLAY" ]; then
     BASE_STAGING_DIR="$HOME/Documents/ECHO_Snapshots"
 else
@@ -65,7 +118,7 @@ PROJECT_SNAPSHOT_DIR_BASE="$BASE_STAGING_DIR/projects"
 CACHE_DIR="$BASE_STAGING_DIR/cache"
 mkdir -p "$SYSTEM_SNAPSHOT_DIR" "$PROJECT_SNAPSHOT_DIR_BASE" "$CACHE_DIR"
 
-# --- Script Execution ---
+# --- Script Execution (Original from v2.6) ---
 HOSTNAME=$(hostname)
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 SYSTEM_OUTPUT_FILE="$SYSTEM_SNAPSHOT_DIR/system_snapshot_${HOSTNAME}_${TIMESTAMP}.md"
@@ -82,7 +135,7 @@ echo "--> Staging snapshots in: $BASE_STAGING_DIR"
 echo "--> Generating system state snapshot for $HOSTNAME..."
 echo "--> Output will be saved to: $SYSTEM_OUTPUT_FILE"
 
-# --- Generate System Snapshot ---
+# --- Generate System Snapshot (Original from v2.6) ---
 {
     echo "# System State Snapshot: ${HOSTNAME}"
     echo "**Generated:** $(date)"
@@ -105,7 +158,7 @@ if command -v docker &> /dev/null; then
   write_command_output "docker ps -a" "Docker Containers" "$SYSTEM_OUTPUT_FILE"
 fi
 
-# --- Project File Indexing ---
+# --- Project File Indexing (Original from v2.6) ---
 PROJECT_ROOT=$(git -C . rev-parse --show-toplevel 2>/dev/null)
 PROJECT_NAME=""
 if [ -n "$PROJECT_ROOT" ]; then
@@ -178,7 +231,7 @@ fi
 echo "--> System snapshot generation complete."
 echo ""
 
-# --- Local GC & Remote Sync ---
+# --- Local GC & Remote Sync (Original from v2.6) ---
 RCLONE_REMOTE_NAME=$(select_rclone_remote)
 if [ -n "$RCLONE_REMOTE_NAME" ]; then
     echo "--> Performing local garbage collection and cloud synchronization..."
