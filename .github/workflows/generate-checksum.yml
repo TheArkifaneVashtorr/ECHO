@@ -1,4 +1,4 @@
-# .github/workflows/generate-checksum.yml
+k# .github/workflows/generate-checksum.yml
 
 name: Generate and Commit Checksum
 
@@ -8,6 +8,10 @@ on:
       - main
     paths:
       - 'echo.sh' # This workflow only runs if echo.sh has been changed
+
+# Grant the GITHUB_TOKEN write permission to commit back to the repository.
+permissions:
+  contents: write
 
 jobs:
   update-checksum:
