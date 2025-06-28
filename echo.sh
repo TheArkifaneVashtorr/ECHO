@@ -1,18 +1,23 @@
 #!/bin/bash
 
-# ECHO (Executable Contextual Host Output) | Version 3.5 (Patched)
+# ECHO (Executable Contextual Host Output) | Version 4.0 (Simplified & Automated)
 # ...
 # Change Log:
-#  - v3.5: Corrected logic for project change detection. Now compares against
-#          the *previous* system snapshot, not the current one.
-#  - v3.4: Test release to validate E2E deployment.
-#  - v3.3: Added up-front dependency checks to prevent silent failures.
-#          Updater logic now requires checksum verification.
+#  - v4.0: Major overhaul for simplified, robust automation.
+#          1. Added project discovery to find all git and docker-compose projects.
+#          2. Removed all conditional snapshot logic (the "gatekeeper").
+#          3. Removed all file-indexing cache logic and user prompts for non-interactive use.
+#          4. Made rclone remote selection non-interactive for cron compatibility.
+#  - v3.9: Corrected project snapshotting to match user specification.
+#  - v3.8: Logic validated by diagnostics, but objective was misunderstood.
+#  - v3.7: Flawed logic attempting to automate placeholder generation.
+#  - v3.6: Flawed logic removing the snapshot gatekeeper.
+#  - v3.5: Original logic.
 
 # --- Core Dependencies & Validation ---
 check_dependencies() {
     # Ensures all required command-line tools are available before execution.
-    local dependencies=("curl" "git" "lscpu" "free" "df" "ip" "ps" "hostnamectl" "stat" "grep" "sed" "touch" "find" "sort" "tail" "head" "awk" "dirname")
+    local dependencies=("curl" "git" "lscpu" "free" "df" "ip" "ps" "hostnamectl" "stat" "grep" "sed" "touch" "find" "sort" "tail" "head" "awk" "dirname" "basename")
     local missing_deps=()
     for dep in "${dependencies[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
@@ -106,6 +111,14 @@ select_rclone_remote() {
         echo "$remotes"
         return 0
     else
+        # If not running in an interactive terminal, default to the first remote.
+        if ! [ -t 0 ]; then
+            local first_remote=$(echo "$remotes" | head -n 1)
+            echo "--> Multiple remotes detected in non-interactive mode. Defaulting to first remote: $first_remote" >&2
+            echo "$first_remote"
+            return 0
+        fi
+
         echo "--> Multiple rclone remotes detected. Please choose one:" >&2
         select remote_choice in $remotes "Quit"; do
             if [[ "$remote_choice" == "Quit" ]]; then
@@ -118,6 +131,48 @@ select_rclone_remote() {
         done < /dev/tty
     fi
 }
+
+snapshot_project() {
+    local project_root="$1"
+    local system_snapshot_filename="$2"
+    local project_snapshot_dir_base="$3"
+
+    local project_name
+    project_name=$(basename "$project_root")
+    echo "--> Found project '$project_name' at: $project_root"
+
+    local project_dir_path="$project_snapshot_dir_base/$project_name"
+    mkdir -p "$project_dir_path"
+
+    local project_output_file="$project_dir_path/project_${project_name}_${TIMESTAMP}.md"
+    echo "--> Generating project snapshot: $project_output_file"
+
+    {
+        echo "# Project Snapshot: ${project_name}"
+        echo "**Parent System Snapshot:** $system_snapshot_filename"
+        echo "**Generated:** $(date)"
+        echo -e "\n---"
+    } > "$project_output_file"
+
+    # Find and index all files, excluding .git directory and files with _EXCLUDE in their path
+    local file_list_tmp
+    file_list_tmp=$(mktemp)
+    find "$project_root" -path '*/.git' -prune -o -type f -print | grep -v "_EXCLUDE" > "$file_list_tmp"
+
+    while IFS= read -r file; do
+        if [ ! -f "$file" ]; then continue; fi
+        echo "--> Indexing: $file"
+        {
+            echo -e "\n#### File: $(realpath "$file")"
+            echo "\`\`\`"
+            cat "$file"
+            echo -e "\`\`\`"
+        } >> "$project_output_file"
+    done < "$file_list_tmp"
+    
+    rm "$file_list_tmp"
+}
+
 
 # --- Script Execution ---
 # Run dependency check first to ensure a stable environment.
@@ -132,23 +187,11 @@ fi
 
 SYSTEM_SNAPSHOT_DIR="$BASE_STAGING_DIR/system"
 PROJECT_SNAPSHOT_DIR_BASE="$BASE_STAGING_DIR/projects"
-CACHE_DIR="$BASE_STAGING_DIR/cache"
-mkdir -p "$SYSTEM_SNAPSHOT_DIR" "$PROJECT_SNAPSHOT_DIR_BASE" "$CACHE_DIR"
+mkdir -p "$SYSTEM_SNAPSHOT_DIR" "$PROJECT_SNAPSHOT_DIR_BASE"
 
 HOSTNAME=$(hostname)
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 SYSTEM_OUTPUT_FILE="$SYSTEM_SNAPSHOT_DIR/system_snapshot_${HOSTNAME}_${TIMESTAMP}.md"
-CACHE_FILE="$CACHE_DIR/.echo_cache"
-touch "$CACHE_FILE"
-
-# *** LOGIC CORRECTION ***
-# Get the *second to last* snapshot to use as the comparison point for changes.
-# This ensures we are comparing against the state *before* this run started.
-LAST_SNAPSHOT_FILE=$(ls -1t "$SYSTEM_SNAPSHOT_DIR"/system_snapshot_*.md 2>/dev/null | head -n 2 | tail -n 1)
-LAST_SNAPSHOT_MTIME=0
-if [ -f "$LAST_SNAPSHOT_FILE" ]; then
-    LAST_SNAPSHOT_MTIME=$(stat -c %Y "$LAST_SNAPSHOT_FILE")
-fi
 
 echo "--> Staging snapshots in: $BASE_STAGING_DIR"
 echo "--> Generating system state snapshot for $HOSTNAME..."
@@ -176,91 +219,51 @@ if command -v docker &> /dev/null; then
   write_command_output "docker info" "Docker Info" "$SYSTEM_OUTPUT_FILE"
   write_command_output "docker ps -a" "Docker Containers" "$SYSTEM_OUTPUT_FILE"
 fi
+echo "--> System snapshot generation complete."
 
 # --- Project File Indexing ---
-PROJECT_ROOT=$(git -C . rev-parse --show-toplevel 2>/dev/null)
-PROJECT_NAME=""
-if [ -n "$PROJECT_ROOT" ]; then
-    PROJECT_NAME=$(basename "$PROJECT_ROOT")
-    read -p "Project root detected at: $PROJECT_ROOT. Index files? (y/N) " -n 1 -r REPLY < /dev/tty; echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        PROJECT_DIR_PATH="$PROJECT_SNAPSHOT_DIR_BASE/$PROJECT_NAME"
-        mkdir -p "$PROJECT_DIR_PATH"
-        FILE_LIST_TMP=$(mktemp)
-        find "$PROJECT_ROOT" -path '*/.git' -prune -o -type f -print | grep -v "_EXCLUDE" > "$FILE_LIST_TMP"
-        NEEDS_SNAPSHOT=false
-        while IFS= read -r file; do
-            if [ -f "$file" ] && [[ $(stat -c %Y "$file") -gt $LAST_SNAPSHOT_MTIME ]]; then
-                NEEDS_SNAPSHOT=true; break
-            fi
-        done < "$FILE_LIST_TMP"
-        if [ "$NEEDS_SNAPSHOT" = true ]; then
-            PROJECT_OUTPUT_FILE="$PROJECT_DIR_PATH/project_${PROJECT_NAME}_${TIMESTAMP}.md"
-            echo "--> Changes detected. Generating project snapshot: $PROJECT_OUTPUT_FILE"
-            {
-                echo "# Project Snapshot: ${PROJECT_NAME}"
-                echo "**Parent System Snapshot:** $(basename "$SYSTEM_OUTPUT_FILE")"
-                echo "**Generated:** $(date)"
-                echo -e "\n---"
-            } > "$PROJECT_OUTPUT_FILE"
-            while IFS= read -r file; do
-                if [ ! -f "$file" ]; then continue; fi
-                decision=$(grep "^${file}:" "$CACHE_FILE" | cut -d: -f2)
-                action="ask"
-                CURRENT_FILE_MTIME=$(stat -c %Y "$file")
-                if [[ "$decision" == "never" ]]; then
-                    action="no"
-                elif [ "$CURRENT_FILE_MTIME" -le "$LAST_SNAPSHOT_MTIME" ] && [[ "$decision" != "always" ]]; then
-                    action="skip_unchanged"
-                elif [[ "$decision" == "always" ]]; then
-                    action="yes"
-                fi
-                if [[ "$action" == "ask" ]]; then
-                    read -p "Index content of '$file'? (y/N/always/never) " choice < /dev/tty
-                    case "$choice" in
-                        y|Y|yes) action="yes_once" ;;
-                        a|A|always) action="yes" ; sed -i "\|^${file}:|d" "$CACHE_FILE"; echo "${file}:always" >> "$CACHE_FILE" ;;
-                        e|E|never) action="no" ; sed -i "\|^${file}:|d" "$CACHE_FILE"; echo "${file}:never" >> "$CACHE_FILE" ;;
-                        *) action="no" ;;
-                    esac
-                fi
-                if [[ "$action" == "yes" || "$action" == "yes_once" ]]; then
-                    echo "--> Indexing $file"
-                    {
-                        echo -e "\n#### File: $(realpath "$file")"
-                        echo "\`\`\`"
-                        cat "$file"
-                        echo -e "\`\`\`"
-                    } >> "$PROJECT_OUTPUT_FILE"
-                elif [[ "$action" == "skip_unchanged" ]]; then
-                    echo "--> Skipping unchanged file: $file"
-                    {
-                        echo -e "\n#### File: $(realpath "$file")"
-                        echo "*File content unchanged since last snapshot.*"
-                    } >> "$PROJECT_OUTPUT_FILE"
-                fi
-            done < "$FILE_LIST_TMP"
-        else
-            echo "--> No project file changes detected. Skipping project snapshot."
-        fi
-        rm "$FILE_LIST_TMP"
-    fi
-fi
+declare -A PROCESSED_PROJECTS
 
-echo "--> System snapshot generation complete."
+# 1. Find and process all git repositories
+echo "--> Searching for Git projects in $HOME..."
+while IFS= read -r git_dir; do
+    project_root=$(dirname "$git_dir")
+    PROCESSED_PROJECTS["$project_root"]=1
+    snapshot_project "$project_root" "$(basename "$SYSTEM_OUTPUT_FILE")" "$PROJECT_SNAPSHOT_DIR_BASE"
+done < <(find "$HOME" -name ".git" -type d -print)
+
+# 2. Find and process all docker-compose projects, avoiding duplicates
+echo "--> Searching for Docker projects in $HOME..."
+while IFS= read -r compose_file; do
+    project_root=$(dirname "$compose_file")
+    if [[ -z "${PROCESSED_PROJECTS["$project_root"]}" ]]; then
+        PROCESSED_PROJECTS["$project_root"]=1
+        snapshot_project "$project_root" "$(basename "$SYSTEM_OUTPUT_FILE")" "$PROJECT_SNAPSHOT_DIR_BASE"
+    else
+        echo "--> Skipping already processed Docker project: $project_root"
+    fi
+done < <(find "$HOME" \( -name "docker-compose.yml" -o -name "docker-compose.yaml" \) -type f -print)
+
+
 echo ""
 
 # --- Local GC & Remote Sync ---
 RCLONE_REMOTE_NAME=$(select_rclone_remote)
 if [ -n "$RCLONE_REMOTE_NAME" ]; then
     echo "--> Performing local garbage collection and cloud synchronization..."
+    # GC for system snapshots
     ls -1t "$SYSTEM_SNAPSHOT_DIR"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
     rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${RCLONE_REMOTE_NAME}:ECHO/${HOSTNAME}/system/" --log-level INFO
-    if [ -n "$PROJECT_NAME" ] && [ -d "$PROJECT_SNAPSHOT_DIR_BASE/$PROJECT_NAME" ]; then
-        PROJECT_DIR_PATH="$PROJECT_SNAPSHOT_DIR_BASE/$PROJECT_NAME"
-        ls -1t "$PROJECT_DIR_PATH"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
-        rclone sync "$PROJECT_DIR_PATH/" "${RCLONE_REMOTE_NAME}:ECHO/${HOSTNAME}/projects/${PROJECT_NAME}/" --log-level INFO
-    fi
+
+    # GC and Sync for each project directory
+    for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
+        if [ -d "$project_dir" ]; then
+            project_name=$(basename "$project_dir")
+            echo "--> Syncing project: $project_name"
+            ls -1t "$project_dir"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
+            rclone sync "$project_dir" "${RCLONE_REMOTE_NAME}:ECHO/${HOSTNAME}/projects/${project_name}/" --log-level INFO
+        fi
+    done
     echo "--> Synchronization complete."
 fi
 
