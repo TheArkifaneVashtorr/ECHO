@@ -1,1 +1,2 @@
 echo_cron.log
+echo_cron.log.*
