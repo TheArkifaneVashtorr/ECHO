@@ -1,2 +1,2 @@
 echo_cron.log
-echo_cron.log.*
+echo_cron.log.[0-9]*
