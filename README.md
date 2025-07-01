@@ -25,6 +25,7 @@ It is an essential tool for system administrators, developers, and AI partners w
 
 * **Automatic Project Discovery:**
     * On each run, the script automatically finds all **Git repositories** and **Docker Compose projects** within the user's home directory.
+    * **Enhanced File Exclusion:** To prevent "Permission denied" errors and avoid capturing irrelevant or sensitive binary data, the script now explicitly excludes common database directories (e.g., `db_data`, `nextcloud_data`, `qdrant_data`, `weaviate_data`) and specific configuration files like `config.php` when generating project snapshots.
     * A complete snapshot, including the full contents of all source files, is generated for every discovered project, every time.
 
 * **Zero-Interaction Design:**
@@ -34,6 +35,7 @@ It is an essential tool for system administrators, developers, and AI partners w
 * **Automated Archive & Cloud Sync:**
     * Performs local garbage collection to keep a configurable number of recent snapshots.
     * Uses `rclone sync` to mirror the local archive to a cloud backend, automatically pruning old remote snapshots to match the local state.
+    * **Remote Trash Cleanup:** After successful synchronization, the script now automatically executes `rclone cleanup` on the configured remote to permanently remove files from the cloud trash/recycle bin, preventing accumulation of deleted data.
 
 ## 3. Installation & Deployment
 

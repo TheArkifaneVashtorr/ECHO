@@ -1,6 +1,6 @@
 # Strategic & Technical Brief: ECHO v4.0
 
---- DOCUMENT UPDATED: 2025-06-27 ---
+--- DOCUMENT UPDATED: 2025-07-01 ---
 
 ## 1.0 Mission Overview
 
@@ -10,7 +10,7 @@
 **AI Partner:** Janus.v4
 **Change Log:**
 
--   **v4.0:** Major overhaul for simplified, robust automation. The script now performs automated discovery of all Git and Docker projects in the home directory and takes unconditional snapshots. All interactive prompts and caching have been removed for true non-interactive execution. The cron job has been simplified accordingly.
+-   **v4.0:** Major overhaul for simplified, robust automation. The script now performs automated discovery of all Git and Docker projects in the home directory and takes unconditional snapshots. All interactive prompts and caching have been removed for true non-interactive execution. The cron job has been simplified accordingly. Enhanced file exclusion logic to prevent indexing of sensitive database files and directories (e.g., `db_data`, `nextcloud_data`, `qdrant_data`, `weaviate_data`) and Nextcloud's `config.php` to avoid "Permission denied" errors and irrelevant data. Implemented `rclone cleanup` to automatically purge deleted files from the remote cloud trash after synchronization, resolving cloud storage bloat.
 -   **v3.5:** Corrected a logical flaw in project change detection. The script now correctly compares file modification times against the previous system snapshot, not the current one, ensuring accurate change detection.
 -   **v3.3:** Added up-front dependency checks and mandatory checksum verification for the updater.
 
@@ -45,6 +45,7 @@ A key architectural feature of ECHO is its ability to maintain version consisten
 The script no longer relies on being run from a specific directory. It now actively discovers all relevant projects within the user's home directory.
 
 * **Discovery Mechanism:** The script uses `find` to locate all directories containing a `.git` folder (Git projects) or a `docker-compose.yml` file (Docker projects).
+* **Enhanced File Exclusion:** To prevent "Permission denied" errors and avoid capturing irrelevant or sensitive binary data, the `find` command now explicitly excludes common database directories (e.g., `db_data`, `nextcloud_data`, `qdrant_data`, `weaviate_data`) and specific configuration files like `config.php` when generating project snapshots.
 * **Unconditional Snapshots:** Project snapshots are generated **every time** the script runs, regardless of whether files have changed. This ensures a complete, hourly record. All conditional logic and caching have been removed.
 
 ### 2.4 Non-Interactive Design
@@ -58,6 +59,7 @@ The script is now designed for fully autonomous execution.
 
 * **Automated Garbage Collection:** To manage disk space, the script maintains a fixed number of recent snapshots for the system and for each discovered project, defined by the `SNAPSHOT_RETENTION_COUNT` variable.
 * **Cloud Synchronization:** If `rclone` is installed, the script will synchronize the local archive, including all project subdirectories, to a configured cloud remote.
+* **Remote Trash Cleanup:** After successful synchronization, the script now automatically executes `rclone cleanup` on the configured remote to permanently remove files from the cloud trash/recycle bin, preventing accumulation of deleted data.
 
 ## 3.0 Operational Requirements & Deployment
 
@@ -96,6 +98,6 @@ The `echo_cron.log` file is automatically managed by the system's `logrotate` ut
 
 A GitHub Actions CI/CD workflow automatically recalculates and commits the `echo.sh.sha256` checksum file whenever `echo.sh` is pushed to the `main` branch.
 
-## 4.0 Project Status (As of 2025-06-27)
+## 4.0 Project Status (As of 2025-07-01)
 
-The system is stable and deployed for fully automated, hourly data collection. Project discovery and snapshotting are now unconditional. Log rotation is configured and active, ensuring long-term stability without manual intervention.
+The system is stable and deployed for fully automated, hourly data collection. Project discovery and snapshotting are now unconditional, with refined exclusions for sensitive data. Log rotation is configured and active, ensuring long-term stability without manual intervention. Cloud synchronization and remote trash cleanup are fully functional.

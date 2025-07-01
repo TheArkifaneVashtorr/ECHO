@@ -154,10 +154,21 @@ snapshot_project() {
         echo -e "\n---"
     } > "$project_output_file"
 
-    # Find and index all files, excluding .git directory and files with _EXCLUDE in their path
+    # Find and index all files, excluding:
+    # - .git directory
+    # - files with _EXCLUDE in their path
+    # - common database data directories (using -path ... -prune)
+    # - specific problematic files like Nextcloud's config.php
     local file_list_tmp
     file_list_tmp=$(mktemp)
-    find "$project_root" -path '*/.git' -prune -o -type f -print | grep -v "_EXCLUDE" > "$file_list_tmp"
+    find "$project_root" \
+        -path '*/.git' -prune -o \
+        -path '*/db_data' -prune -o \
+        -path '*/nextcloud_data' -prune -o \
+        -path '*/qdrant_data' -prune -o \
+        -path '*/weaviate_data' -prune -o \
+        -name 'config.php' -prune -o \
+        -type f -print | grep -v "_EXCLUDE" > "$file_list_tmp"
 
     while IFS= read -r file; do
         if [ ! -f "$file" ]; then continue; fi
@@ -165,7 +176,13 @@ snapshot_project() {
         {
             echo -e "\n#### File: $(realpath "$file")"
             echo "\`\`\`"
-            cat "$file"
+            # Attempt to cat the file. If permission is denied or it's a binary, skip content.
+            # This ensures the file path is listed, but content isn't captured if problematic.
+            if head -c 1K "$file" > /dev/null 2>&1; then # Check if readable as text
+                cat "$file"
+            else
+                echo "ERROR: Could not read file content (permission denied or binary file)."
+            fi
             echo -e "\`\`\`"
         } >> "$project_output_file"
     done < "$file_list_tmp"
@@ -264,7 +281,12 @@ if [ -n "$RCLONE_REMOTE_NAME" ]; then
             rclone sync "$project_dir" "${RCLONE_REMOTE_NAME}:ECHO/${HOSTNAME}/projects/${project_name}/" --log-level INFO
         fi
     done
-    echo "--> Synchronization complete."
+    
+    # Clean up remote trash after sync
+    echo "--> Cleaning up rclone remote trash for ${RCLONE_REMOTE_NAME}..." >&2
+    rclone cleanup "${RCLONE_REMOTE_NAME}:" --log-level INFO
+
+    echo "--> Synchronization and cleanup complete."
 fi
 
 echo "--> Snapshot process finished."
