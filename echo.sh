@@ -1,8 +1,55 @@
 #!/bin/bash
 
-# ECHO (Executable Contextual Host Output) | Version 4.0 (Simplified & Automated)
+# --- Autonomous Update Bootstrap ---
+# This section ensures the script is always the latest version.
+# It calls a separate updater script and then uses 'exec' to replace the
+# current running process with the new version, ensuring the update is immediate.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+UPDATER_SCRIPT_PATH="${SCRIPT_DIR}/update-echo.sh"
+
+# Extract the version number from a script file's header.
+get_version_from_string() {
+    echo "$1" | grep -o 'Version [0-9.]*' | awk '{print $2}'
+}
+
+# Only check for updates if the updater script itself exists.
+if [ -x "$UPDATER_SCRIPT_PATH" ]; then
+    # Get Local Version from this script's own header.
+    LOCAL_VERSION=$(get_version_from_string "$(head -n 20 "$0")")
+
+    # Fetch remote version (only if curl is available)
+    if command -v curl &> /dev/null; then
+        ECHO_REPO_URL="https://raw.githubusercontent.com/TheArkifaneVashtorr/ECHO/main/echo.sh"
+        REMOTE_VERSION_CONTENT=$(curl -s -L "${ECHO_REPO_URL}" | head -n 20)
+        REMOTE_VERSION=$(get_version_from_string "$REMOTE_VERSION_CONTENT")
+
+        # Proceed only if both versions were successfully parsed
+        if [[ -n "$LOCAL_VERSION" && -n "$REMOTE_VERSION" ]]; then
+            # Determine the highest version number using a version-aware sort
+            HIGHEST_VERSION=$(printf "%s\n%s" "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n 1)
+
+            # Trigger an update if the remote version is higher than the local version
+            if [[ "$HIGHEST_VERSION" != "$LOCAL_VERSION" && "$HIGHEST_VERSION" == "$REMOTE_VERSION" ]]; then
+                echo "[ECHO-Startup] New version ${REMOTE_VERSION} detected. Handing off to updater..." >&2
+                
+                # Execute the updater script
+                "$UPDATER_SCRIPT_PATH"
+                
+                # After updating, replace the current script process with the new version
+                # and pass along any arguments that were originally provided.
+                echo "[ECHO-Startup] Update complete. Re-executing with new version..." >&2
+                exec bash "$0" "$@"
+            fi
+        fi
+    fi
+fi
+# --- End of Autonomous Update Bootstrap ---
+
+
+# ECHO (Executable Contextual Host Output) | Version 4.1 (Simplified & Automated)
 # ...
 # Change Log:
+#  - v4.1: Refined update bootstrap to use 'exec' for immediate execution of new version.
 #  - v4.0: Major overhaul for simplified, robust automation.
 #          1. Added project discovery to find all git and docker-compose projects.
 #          2. Removed all conditional snapshot logic (the "gatekeeper").
@@ -32,55 +79,9 @@ check_dependencies() {
     fi
 }
 
-# --- Autonomous Update Bootstrap ---
-ECHO_REPO_URL="https://raw.githubusercontent.com/TheArkifaneVashtorr/ECHO/main/echo.sh"
-
-log_update() {
-    # Logs an update-related message with a timestamp. Redirects stdout to stderr.
-    echo "[ECHO-Updater] $(date '+%Y-%m-%d %H:%M:%S') - $1" >&2
-}
-
-# Extract the version number from a script file's header.
-get_version_from_string() {
-    echo "$1" | grep -o 'Version [0-9.]*' | awk '{print $2}'
-}
-
-# The full path to this script and its updater companion.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-UPDATER_SCRIPT_PATH="${SCRIPT_DIR}/update-echo.sh"
-
-# Get Local Version from this script's own header.
-LOCAL_VERSION=$(get_version_from_string "$(head -n 12 "$0")")
-
-# Fetch remote version (only if curl is available)
-REMOTE_VERSION_CONTENT=$(curl -s -L "${ECHO_REPO_URL}" | head -n 12)
-REMOTE_VERSION=$(get_version_from_string "$REMOTE_VERSION_CONTENT")
-
-# Proceed only if both versions were successfully parsed
-if [[ -n "$LOCAL_VERSION" && -n "$REMOTE_VERSION" ]]; then
-    
-    # Determine the highest version number using a version-aware sort
-    HIGHEST_VERSION=$(printf "%s\n%s" "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n 1)
-
-    # Only trigger an update if the highest version is NOT our local version
-    # AND the remote version is the highest version. This prevents downgrades.
-    if [[ "$HIGHEST_VERSION" != "$LOCAL_VERSION" && "$HIGHEST_VERSION" == "$REMOTE_VERSION" ]]; then
-        log_update "Newer version detected. Local: ${LOCAL_VERSION}, Remote: ${REMOTE_VERSION}. Update required."
-        if [ -x "$UPDATER_SCRIPT_PATH" ]; then
-            log_update "Handing off to external updater at ${UPDATER_SCRIPT_PATH}."
-            # Execute updater in the background and exit immediately.
-            "$UPDATER_SCRIPT_PATH" &
-            exit 0
-        else
-            log_update "ERROR: Updater script not found or not executable at ${UPDATER_SCRIPT_PATH}. Cannot self-update."
-        fi
-    fi
-fi
-# --- End of Autonomous Update Bootstrap ---
-
 
 # --- Configuration ---
-SNAPSHOT_RETENTION_COUNT=5
+SNAPSHOT_RETENTION_COUNT=1
 
 # --- Function Definitions ---
 write_command_output() {
@@ -167,6 +168,7 @@ snapshot_project() {
         -path '*/nextcloud_data' -prune -o \
         -path '*/qdrant_data' -prune -o \
         -path '*/weaviate_data' -prune -o \
+        -path '*/ollama_data' -prune -o \
         -name 'config.php' -prune -o \
         -type f -print | grep -v "_EXCLUDE" > "$file_list_tmp"
 
