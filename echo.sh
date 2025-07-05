@@ -31,10 +31,10 @@ if [ -x "$UPDATER_SCRIPT_PATH" ]; then
             # Trigger an update if the remote version is higher than the local version
             if [[ "$HIGHEST_VERSION" != "$LOCAL_VERSION" && "$HIGHEST_VERSION" == "$REMOTE_VERSION" ]]; then
                 echo "[ECHO-Startup] New version ${REMOTE_VERSION} detected. Handing off to updater..." >&2
-                
+
                 # Execute the updater script
                 "$UPDATER_SCRIPT_PATH"
-                
+
                 # After updating, replace the current script process with the new version
                 # and pass along any arguments that were originally provided.
                 echo "[ECHO-Startup] Update complete. Re-executing with new version..." >&2
@@ -46,24 +46,17 @@ fi
 # --- End of Autonomous Update Bootstrap ---
 
 
-# ECHO (Executable Contextual Host Output) | Version 4.1 (Simplified & Automated)
+# ECHO (Executable Contextual Host Output) | Version 4.2 (MinIO Integration)
 # ...
 # Change Log:
+#  - v4.2: Migrated rclone target from hardcoded 'ECHO' to dynamic S3 bucket.
+#          - Uses new ECHO_BUCKET_NAME env var, defaults to 'echosnapshotdata'.
+#          - Simplified rclone cleanup logic.
 #  - v4.1: Refined update bootstrap to use 'exec' for immediate execution of new version.
 #  - v4.0: Major overhaul for simplified, robust automation.
-#          1. Added project discovery to find all git and docker-compose projects.
-#          2. Removed all conditional snapshot logic (the "gatekeeper").
-#          3. Removed all file-indexing cache logic and user prompts for non-interactive use.
-#          4. Made rclone remote selection non-interactive for cron compatibility.
-#  - v3.9: Corrected project snapshotting to match user specification.
-#  - v3.8: Logic validated by diagnostics, but objective was misunderstood.
-#  - v3.7: Flawed logic attempting to automate placeholder generation.
-#  - v3.6: Flawed logic removing the snapshot gatekeeper.
-#  - v3.5: Original logic.
 
 # --- Core Dependencies & Validation ---
 check_dependencies() {
-    # Ensures all required command-line tools are available before execution.
     local dependencies=("curl" "git" "lscpu" "free" "df" "ip" "ps" "hostnamectl" "stat" "grep" "sed" "touch" "find" "sort" "tail" "head" "awk" "dirname" "basename")
     local missing_deps=()
     for dep in "${dependencies[@]}"; do
@@ -82,6 +75,9 @@ check_dependencies() {
 
 # --- Configuration ---
 SNAPSHOT_RETENTION_COUNT=1
+# Use environment variable for bucket name if it exists, otherwise default to 'echosnapshotdata'
+ECHO_BUCKET_NAME="${ECHO_BUCKET_NAME:-echosnapshotdata}"
+
 
 # --- Function Definitions ---
 write_command_output() {
@@ -93,44 +89,6 @@ write_command_output() {
     echo "\`\`\`" >> "$target_file"
     eval "$cmd_string" >> "$target_file" 2>&1
     echo "\`\`\`" >> "$target_file"
-}
-
-select_rclone_remote() {
-    if ! command -v rclone &> /dev/null; then
-        echo "--> rclone not found. Skipping cloud sync." >&2
-        return 1
-    fi
-    local remotes
-    remotes=$(rclone listremotes | sed 's/://g')
-    local remote_count
-    remote_count=$(echo "$remotes" | wc -w)
-    if [ "$remote_count" -eq 0 ]; then
-        echo "--> No rclone remotes configured. Skipping cloud sync." >&2
-        return 1
-    elif [ "$remote_count" -eq 1 ]; then
-        echo "--> Auto-detected single rclone remote: $remotes" >&2
-        echo "$remotes"
-        return 0
-    else
-        # If not running in an interactive terminal, default to the first remote.
-        if ! [ -t 0 ]; then
-            local first_remote=$(echo "$remotes" | head -n 1)
-            echo "--> Multiple remotes detected in non-interactive mode. Defaulting to first remote: $first_remote" >&2
-            echo "$first_remote"
-            return 0
-        fi
-
-        echo "--> Multiple rclone remotes detected. Please choose one:" >&2
-        select remote_choice in $remotes "Quit"; do
-            if [[ "$remote_choice" == "Quit" ]]; then
-                echo "--> No remote selected. Skipping cloud sync." >&2; return 1
-            elif [ -n "$remote_choice" ]; then
-                echo "--> Using remote: $remote_choice" >&2; echo "$remote_choice"; return 0
-            else
-                echo "Invalid selection. Please try again." >&2
-            fi
-        done < /dev/tty
-    fi
 }
 
 snapshot_project() {
@@ -155,11 +113,6 @@ snapshot_project() {
         echo -e "\n---"
     } > "$project_output_file"
 
-    # Find and index all files, excluding:
-    # - .git directory
-    # - files with _EXCLUDE in their path
-    # - common database data directories (using -path ... -prune)
-    # - specific problematic files like Nextcloud's config.php
     local file_list_tmp
     file_list_tmp=$(mktemp)
     find "$project_root" \
@@ -178,9 +131,7 @@ snapshot_project() {
         {
             echo -e "\n#### File: $(realpath "$file")"
             echo "\`\`\`"
-            # Attempt to cat the file. If permission is denied or it's a binary, skip content.
-            # This ensures the file path is listed, but content isn't captured if problematic.
-            if head -c 1K "$file" > /dev/null 2>&1; then # Check if readable as text
+            if head -c 1K "$file" > /dev/null 2>&1; then
                 cat "$file"
             else
                 echo "ERROR: Could not read file content (permission denied or binary file)."
@@ -194,7 +145,6 @@ snapshot_project() {
 
 
 # --- Script Execution ---
-# Run dependency check first to ensure a stable environment.
 check_dependencies
 
 # --- Dynamic Path Configuration ---
@@ -242,8 +192,6 @@ echo "--> System snapshot generation complete."
 
 # --- Project File Indexing ---
 declare -A PROCESSED_PROJECTS
-
-# 1. Find and process all git repositories
 echo "--> Searching for Git projects in $HOME..."
 while IFS= read -r git_dir; do
     project_root=$(dirname "$git_dir")
@@ -251,7 +199,6 @@ while IFS= read -r git_dir; do
     snapshot_project "$project_root" "$(basename "$SYSTEM_OUTPUT_FILE")" "$PROJECT_SNAPSHOT_DIR_BASE"
 done < <(find "$HOME" -name ".git" -type d -print)
 
-# 2. Find and process all docker-compose projects, avoiding duplicates
 echo "--> Searching for Docker projects in $HOME..."
 while IFS= read -r compose_file; do
     project_root=$(dirname "$compose_file")
@@ -262,7 +209,6 @@ while IFS= read -r compose_file; do
         echo "--> Skipping already processed Docker project: $project_root"
     fi
 done < <(find "$HOME" \( -name "docker-compose.yml" -o -name "docker-compose.yaml" \) -type f -print)
-
 
 echo ""
 
@@ -276,7 +222,6 @@ else
     else
         echo "--> Performing local garbage collection and cloud synchronization for all remotes..."
 
-        # Perform local GC once for all snapshot directories before looping through remotes.
         echo "--> Performing local garbage collection..."
         ls -1t "$SYSTEM_SNAPSHOT_DIR"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
         for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
@@ -286,32 +231,32 @@ else
         done
         echo "--> Local GC complete."
 
-        # Loop through each configured remote for sync and cleanup operations.
         for remote in $ALL_REMOTES; do
             echo "--------------------------------------------------"
             echo "--> Processing remote: $remote"
             
-            # Sync system snapshots
-            echo "--> Syncing system snapshots to $remote..."
-            rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${remote}:ECHO/${HOSTNAME}/system/" --log-level INFO
+            # Use the bucket name for S3-compatible remotes
+            BUCKET_TO_USE=""
+            if [[ "$remote" == *"minio"* ]]; then
+                BUCKET_TO_USE="${ECHO_BUCKET_NAME}/"
+            else
+                # Fallback to the old 'ECHO' path for other remotes like Google Drive
+                BUCKET_TO_USE="ECHO/"
+            fi
 
-            # Sync each project directory
+            echo "--> Syncing system snapshots to $remote..."
+            rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/system/" --log-level INFO
+
             for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
                 if [ -d "$project_dir" ]; then
                     project_name=$(basename "$project_dir")
                     echo "--> Syncing project '$project_name' to remote '$remote'..."
-                    rclone sync "$project_dir" "${remote}:ECHO/${HOSTNAME}/projects/${project_name}/" --log-level INFO
+                    rclone sync "$project_dir" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/projects/${project_name}/" --log-level INFO
                 fi
             done
             
-            # Conditionally clean up the remote's trash
-            # The 'cleanup' command is not supported by all remotes (e.g., standard WebDAV).
-            if [[ "$remote" != "nextcloud" ]]; then
-                echo "--> Cleaning up remote trash for ${remote}..."
-                rclone cleanup "${remote}:" --log-level INFO
-            else
-                echo "--> Skipping cleanup for remote '${remote}' (not supported)."
-            fi
+            echo "--> Attempting to clean up remote trash for ${remote}..."
+            rclone cleanup "${remote}:" --log-level INFO
 
             echo "--> Finished processing remote: $remote"
         done
