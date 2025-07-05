@@ -1,42 +1,23 @@
 #!/bin/bash
 
 # --- Autonomous Update Bootstrap ---
-# This section ensures the script is always the latest version.
-# It calls a separate updater script and then uses 'exec' to replace the
-# current running process with the new version, ensuring the update is immediate.
+# (This section is unchanged and preserved)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 UPDATER_SCRIPT_PATH="${SCRIPT_DIR}/update-echo.sh"
-
-# Extract the version number from a script file's header.
 get_version_from_string() {
     echo "$1" | grep -o 'Version [0-9.]*' | awk '{print $2}'
 }
-
-# Only check for updates if the updater script itself exists.
 if [ -x "$UPDATER_SCRIPT_PATH" ]; then
-    # Get Local Version from this script's own header.
-    LOCAL_VERSION=$(get_version_from_string "$(head -n 20 "$0")")
-
-    # Fetch remote version (only if curl is available)
+    LOCAL_VERSION=$(get_version_from_string "$(head -n 25 "$0")")
     if command -v curl &> /dev/null; then
         ECHO_REPO_URL="https://raw.githubusercontent.com/TheArkifaneVashtorr/ECHO/main/echo.sh"
-        REMOTE_VERSION_CONTENT=$(curl -s -L "${ECHO_REPO_URL}" | head -n 20)
+        REMOTE_VERSION_CONTENT=$(curl -s -L "${ECHO_REPO_URL}" | head -n 25)
         REMOTE_VERSION=$(get_version_from_string "$REMOTE_VERSION_CONTENT")
-
-        # Proceed only if both versions were successfully parsed
         if [[ -n "$LOCAL_VERSION" && -n "$REMOTE_VERSION" ]]; then
-            # Determine the highest version number using a version-aware sort
             HIGHEST_VERSION=$(printf "%s\n%s" "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n 1)
-
-            # Trigger an update if the remote version is higher than the local version
             if [[ "$HIGHEST_VERSION" != "$LOCAL_VERSION" && "$HIGHEST_VERSION" == "$REMOTE_VERSION" ]]; then
                 echo "[ECHO-Startup] New version ${REMOTE_VERSION} detected. Handing off to updater..." >&2
-
-                # Execute the updater script
                 "$UPDATER_SCRIPT_PATH"
-
-                # After updating, replace the current script process with the new version
-                # and pass along any arguments that were originally provided.
                 echo "[ECHO-Startup] Update complete. Re-executing with new version..." >&2
                 exec bash "$0" "$@"
             fi
@@ -46,223 +27,153 @@ fi
 # --- End of Autonomous Update Bootstrap ---
 
 
-# ECHO (Executable Contextual Host Output) | Version 4.2 (MinIO Integration)
+# ECHO (Executable Contextual Host Output) | Version 6.2 (Cron Log Integration)
 # ...
 # Change Log:
-#  - v4.2: Migrated rclone target from hardcoded 'ECHO' to dynamic S3 bucket.
-#          - Uses new ECHO_BUCKET_NAME env var, defaults to 'echosnapshotdata'.
-#          - Simplified rclone cleanup logic.
-#  - v4.1: Refined update bootstrap to use 'exec' for immediate execution of new version.
-#  - v4.0: Major overhaul for simplified, robust automation.
+#  - v6.2: Added cron log capture to system JSON snapshot.
+#  - v6.1: Added project directory tree output to JSON snapshot for structural context.
+#  - v6.0: System snapshot is now a structured JSON object.
 
 # --- Core Dependencies & Validation ---
 check_dependencies() {
-    local dependencies=("curl" "git" "lscpu" "free" "df" "ip" "ps" "hostnamectl" "stat" "grep" "sed" "touch" "find" "sort" "tail" "head" "awk" "dirname" "basename")
+    local dependencies=("rclone" "curl" "git" "lscpu" "free" "df" "ip" "hostnamectl" "stat" "grep" "sed" "touch" "find" "sort" "tail" "head" "awk" "dirname" "basename" "jq" "tree")
     local missing_deps=()
     for dep in "${dependencies[@]}"; do
         if ! command -v "$dep" &> /dev/null; then
             missing_deps+=("$dep")
         fi
     done
-
     if [ ${#missing_deps[@]} -ne 0 ]; then
-        echo "[ECHO-Startup] FATAL: Missing one or more core dependencies. Cannot continue." >&2
-        echo "[ECHO-Startup] Missing tools: ${missing_deps[*]}" >&2
-        exit 1
+        echo "[ECHO-Startup] FATAL: Missing one or more core dependencies. Cannot continue." >&2; echo "[ECHO-Startup] Missing tools: ${missing_deps[*]}" >&2; exit 1;
     fi
 }
 
-
 # --- Configuration ---
 SNAPSHOT_RETENTION_COUNT=1
-# Use environment variable for bucket name if it exists, otherwise default to 'echosnapshotdata'
 ECHO_BUCKET_NAME="${ECHO_BUCKET_NAME:-echosnapshotdata}"
-
-
-# --- Function Definitions ---
-write_command_output() {
-    local cmd_string="$1"
-    local header_text="$2"
-    local target_file="$3"
-    if [ ! -f "$target_file" ]; then return; fi
-    echo -e "\n### $header_text" >> "$target_file"
-    echo "\`\`\`" >> "$target_file"
-    eval "$cmd_string" >> "$target_file" 2>&1
-    echo "\`\`\`" >> "$target_file"
-}
-
-snapshot_project() {
-    local project_root="$1"
-    local system_snapshot_filename="$2"
-    local project_snapshot_dir_base="$3"
-
-    local project_name
-    project_name=$(basename "$project_root")
-    echo "--> Found project '$project_name' at: $project_root"
-
-    local project_dir_path="$project_snapshot_dir_base/$project_name"
-    mkdir -p "$project_dir_path"
-
-    local project_output_file="$project_dir_path/project_${project_name}_${TIMESTAMP}.md"
-    echo "--> Generating project snapshot: $project_output_file"
-
-    {
-        echo "# Project Snapshot: ${project_name}"
-        echo "**Parent System Snapshot:** $system_snapshot_filename"
-        echo "**Generated:** $(date)"
-        echo -e "\n---"
-    } > "$project_output_file"
-
-    local file_list_tmp
-    file_list_tmp=$(mktemp)
-    find "$project_root" \
-        -path '*/.git' -prune -o \
-        -path '*/db_data' -prune -o \
-        -path '*/nextcloud_data' -prune -o \
-        -path '*/qdrant_data' -prune -o \
-        -path '*/weaviate_data' -prune -o \
-        -path '*/ollama_data' -prune -o \
-        -name 'config.php' -prune -o \
-        -type f -print | grep -v "_EXCLUDE" > "$file_list_tmp"
-
-    while IFS= read -r file; do
-        if [ ! -f "$file" ]; then continue; fi
-        echo "--> Indexing: $file"
-        {
-            echo -e "\n#### File: $(realpath "$file")"
-            echo "\`\`\`"
-            if head -c 1K "$file" > /dev/null 2>&1; then
-                cat "$file"
-            else
-                echo "ERROR: Could not read file content (permission denied or binary file)."
-            fi
-            echo -e "\`\`\`"
-        } >> "$project_output_file"
-    done < "$file_list_tmp"
-    
-    rm "$file_list_tmp"
-}
-
+CURRENT_USER=$(whoami)
+ECHO_CRON_LOG_PATH="$HOME/ECHO/echo_cron.log"
 
 # --- Script Execution ---
 check_dependencies
 
-# --- Dynamic Path Configuration ---
-if [ -n "$DISPLAY" ]; then
-    BASE_STAGING_DIR="$HOME/Documents/ECHO_Snapshots"
-else
-    BASE_STAGING_DIR="$HOME/ECHO_Snapshots"
-fi
-
+# --- Path & Filename Configuration ---
+BASE_STAGING_DIR="$HOME/ECHO_Snapshots"
 SYSTEM_SNAPSHOT_DIR="$BASE_STAGING_DIR/system"
-PROJECT_SNAPSHOT_DIR_BASE="$BASE_STAGING_DIR/projects"
-mkdir -p "$SYSTEM_SNAPSHOT_DIR" "$PROJECT_SNAPSHOT_DIR_BASE"
+mkdir -p "$SYSTEM_SNAPSHOT_DIR"
 
 HOSTNAME=$(hostname)
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-SYSTEM_OUTPUT_FILE="$SYSTEM_SNAPSHOT_DIR/system_snapshot_${HOSTNAME}_${TIMESTAMP}.md"
+SYSTEM_OUTPUT_FILE="$SYSTEM_SNAPSHOT_DIR/system_snapshot_${HOSTNAME}_${TIMESTAMP}.json"
 
-echo "--> Staging snapshots in: $BASE_STAGING_DIR"
-echo "--> Generating system state snapshot for $HOSTNAME..."
-echo "--> Output will be saved to: $SYSTEM_OUTPUT_FILE"
+echo "--> Staging system snapshot in: $SYSTEM_SNAPSHOT_DIR"
+echo "--> Generating structured JSON system state snapshot for $HOSTNAME..."
 
-# --- Generate System Snapshot ---
-{
-    echo "# System State Snapshot: ${HOSTNAME}"
-    echo "**Generated:** $(date)"
-    echo -e "\n---"
-} > "$SYSTEM_OUTPUT_FILE"
-echo -e "\n## 1. Hardware Information" >> "$SYSTEM_OUTPUT_FILE"
-write_command_output "lscpu" "CPU Info" "$SYSTEM_OUTPUT_FILE"
-write_command_output "free -h" "Memory Info" "$SYSTEM_OUTPUT_FILE"
-if command -v nvidia-smi &> /dev/null; then write_command_output "nvidia-smi" "NVIDIA GPU Info" "$SYSTEM_OUTPUT_FILE"; fi
-echo -e "\n## 2. OS & Software" >> "$SYSTEM_OUTPUT_FILE"
-write_command_output "hostnamectl" "OS Info" "$SYSTEM_OUTPUT_FILE"
-write_command_output "ps aux" "Running Processes" "$SYSTEM_OUTPUT_FILE"
-if command -v dpkg &> /dev/null; then write_command_output "dpkg -l" "Installed Packages (dpkg)" "$SYSTEM_OUTPUT_FILE"; fi
-echo -e "\n## 3. Disk & Network" >> "$SYSTEM_OUTPUT_FILE"
-write_command_output "df -h" "Disk Usage" "$SYSTEM_OUTPUT_FILE"
-write_command_output "ip a" "Network Interfaces" "$SYSTEM_OUTPUT_FILE"
-echo -e "\n## 4. Docker Environment" >> "$SYSTEM_OUTPUT_FILE"
+# --- JSON Snapshot Generation ---
+JSON_OUTPUT="{}"
+add_json_from_command() {
+    local key_path="$1"
+    local command_to_run="$2"
+    local result
+    result=$(eval "$command_to_run" | jq -R -s '.')
+    JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq --argjson data "$result" "$key_path = \$data")
+}
+
+# 1. System Info
+JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq ".timestamp = \"$(date --iso-8601=seconds)\"")
+JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq ".hostname = \"$HOSTNAME\"")
+JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq ".user = \"$CURRENT_USER\"")
+add_json_from_command '.system.os_info' 'hostnamectl'
+add_json_from_command '.system.disk_usage' 'df -h'
+add_json_from_command '.system.network_interfaces' 'ip a'
+add_json_from_command ".system.cron_log" "tail -n 50 '$ECHO_CRON_LOG_PATH' 2>/dev/null"
+add_json_from_command '.hardware.cpu_info' 'lscpu'
+add_json_from_command '.hardware.memory_info' 'free -h'
+if command -v nvidia-smi &> /dev/null; then add_json_from_command '.hardware.gpu_info' 'nvidia-smi'; fi
+
+# 2. Docker Info
 if command -v docker &> /dev/null; then
-  write_command_output "docker info" "Docker Info" "$SYSTEM_OUTPUT_FILE"
-  write_command_output "docker ps -a" "Docker Containers" "$SYSTEM_OUTPUT_FILE"
+    add_json_from_command '.docker.info' 'docker info'
+    add_json_from_command '.docker.containers' 'docker ps -a'
+    add_json_from_command '.docker.resource_stats' 'docker stats --no-stream'
+    add_json_from_command '.docker.networks' 'docker network ls'
+
+    LOGS_JSON="[]"
+    while IFS= read -r container_id; do
+        container_name=$(docker inspect -f '{{.Name}}' "$container_id" | sed 's,^/,,')
+        logs=$(docker logs --tail 50 "$container_id" 2>&1 | jq -R -s '.')
+        LOGS_JSON=$(echo "$LOGS_JSON" | jq --arg name "$container_name" --argjson logs "$logs" '. += [{"container_name": $name, "logs": $logs}]')
+    done < <(docker ps -q)
+    JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq --argjson data "$LOGS_JSON" '.docker.container_logs = $data')
 fi
-echo "--> System snapshot generation complete."
 
-# --- Project File Indexing ---
+# 3. Project Discovery
 declare -A PROCESSED_PROJECTS
-echo "--> Searching for Git projects in $HOME..."
-while IFS= read -r git_dir; do
-    project_root=$(dirname "$git_dir")
-    PROCESSED_PROJECTS["$project_root"]=1
-    snapshot_project "$project_root" "$(basename "$SYSTEM_OUTPUT_FILE")" "$PROJECT_SNAPSHOT_DIR_BASE"
-done < <(find "$HOME" -name ".git" -type d -print)
+declare -a PROJECTS_TO_SYNC
+declare -a DOCKER_COMPOSE_FILES
 
-echo "--> Searching for Docker projects in $HOME..."
+while IFS= read -r git_dir; do
+    project_root=$(dirname "$git_dir"); if [[ -z "${PROCESSED_PROJECTS["$project_root"]}" ]]; then PROCESSED_PROJECTS["$project_root"]=1; PROJECTS_TO_SYNC+=("$project_root"); fi
+done < <(find "$HOME" -name ".git" -type d -print)
 while IFS= read -r compose_file; do
-    project_root=$(dirname "$compose_file")
-    if [[ -z "${PROCESSED_PROJECTS["$project_root"]}" ]]; then
-        PROCESSED_PROJECTS["$project_root"]=1
-        snapshot_project "$project_root" "$(basename "$SYSTEM_OUTPUT_FILE")" "$PROJECT_SNAPSHOT_DIR_BASE"
-    else
-        echo "--> Skipping already processed Docker project: $project_root"
-    fi
+    project_root=$(dirname "$compose_file"); if [[ -z "${PROCESSED_PROJECTS["$project_root"]}" ]]; then PROCESSED_PROJECTS["$project_root"]=1; PROJECTS_TO_SYNC+=("$project_root"); else echo "--> Skipping already processed Docker project: $project_root"; fi
+    DOCKER_COMPOSE_FILES+=("$compose_file")
 done < <(find "$HOME" \( -name "docker-compose.yml" -o -name "docker-compose.yaml" \) -type f -print)
 
+# 4. Add Docker-Compose and Project Tree Info to JSON
+COMPOSE_JSON="[]"
+for file_path in "${DOCKER_COMPOSE_FILES[@]}"; do
+    content=$(cat "$file_path" | jq -R -s '.')
+    COMPOSE_JSON=$(echo "$COMPOSE_JSON" | jq --arg path "$file_path" --argjson content "$content" '. += [{"path": $path, "content": $content}]')
+done
+JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq --argjson data "$COMPOSE_JSON" '.docker.compose_files = $data')
+
+echo "--> Generating directory trees for discovered projects..."
+TREE_JSON="[]"
+for project_path in "${PROJECTS_TO_SYNC[@]}"; do
+    project_name=$(basename "$project_path")
+    tree_output=$(tree "$project_path" -L 3 -a -I '.git|__pycache__|*venv|node_modules|ECHO_Snapshots|*data' | jq -R -s '.')
+    TREE_JSON=$(echo "$TREE_JSON" | jq --arg name "$project_name" --argjson tree "$tree_output" '. += [{"project_name": $name, "tree": $tree}]')
+done
+JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq --argjson data "$TREE_JSON" '.project_directory_trees = $data')
+
+# Write final JSON to file
+echo "$JSON_OUTPUT" | jq '.' > "$SYSTEM_OUTPUT_FILE"
+echo "--> JSON system snapshot generation complete."
 echo ""
 
 # --- Local GC & Remote Sync ---
 if ! command -v rclone &> /dev/null; then
     echo "--> rclone not found. Skipping all cloud sync operations." >&2
 else
-    ALL_REMOTES=$(rclone listremotes | sed 's/://g')
-    if [ -z "$ALL_REMOTES" ]; then
-        echo "--> No rclone remotes configured. Skipping cloud sync." >&2
+    ALL_REMOTES=$(rclone listremotes | sed 's/://g');
+    if [ -z "$ALL_REMOTES" ]; then echo "--> No rclone remotes configured. Skipping cloud sync." >&2;
     else
         echo "--> Performing local garbage collection and cloud synchronization for all remotes..."
-
-        echo "--> Performing local garbage collection..."
-        ls -1t "$SYSTEM_SNAPSHOT_DIR"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
-        for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
-            if [ -d "$project_dir" ]; then
-                ls -1t "$project_dir"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
-            fi
-        done
+        echo "--> Performing local garbage collection for system snapshots..."
+        ls -1t "$SYSTEM_SNAPSHOT_DIR"/*.json 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
         echo "--> Local GC complete."
-
         for remote in $ALL_REMOTES; do
-            echo "--------------------------------------------------"
-            echo "--> Processing remote: $remote"
+            echo "--------------------------------------------------"; echo "--> Processing remote: $remote"
+            BUCKET_TO_USE=""; if [[ "$remote" == *"minio"* ]]; then BUCKET_TO_USE="${ECHO_BUCKET_NAME}/"; else BUCKET_TO_USE="ECHO/"; fi
             
-            # Use the bucket name for S3-compatible remotes
-            BUCKET_TO_USE=""
-            if [[ "$remote" == *"minio"* ]]; then
-                BUCKET_TO_USE="${ECHO_BUCKET_NAME}/"
-            else
-                # Fallback to the old 'ECHO' path for other remotes like Google Drive
-                BUCKET_TO_USE="ECHO/"
-            fi
-
             echo "--> Syncing system snapshots to $remote..."
-            rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/system/" --log-level INFO
-
-            for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
-                if [ -d "$project_dir" ]; then
-                    project_name=$(basename "$project_dir")
-                    echo "--> Syncing project '$project_name' to remote '$remote'..."
-                    rclone sync "$project_dir" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/projects/${project_name}/" --log-level INFO
+            rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/system/" --log-level INFO --delete-after
+            
+            for project_path in "${PROJECTS_TO_SYNC[@]}"; do
+                if [ -d "$project_path" ]; then
+                    project_name=$(basename "$project_path")
+                    echo "--> Syncing project '$project_name' to remote '$remote'...";
+                    rclone sync "$project_path" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/projects/${project_name}/" \
+                        --exclude '.git/**' --exclude '*data/**' --exclude 'ECHO_Snapshots/**' \
+                        --exclude '*venv/**' --exclude 'node_modules/**' --exclude '__pycache__/**' \
+                        --exclude 'cognitive_tier/**' --exclude '**/config.php' --log-level INFO --delete-after;
                 fi
             done
-            
-            echo "--> Attempting to clean up remote trash for ${remote}..."
-            rclone cleanup "${remote}:" --log-level INFO
-
-            echo "--> Finished processing remote: $remote"
+            echo "--> Attempting to clean up remote trash for ${remote}..."; rclone cleanup "${remote}:" --log-level INFO
+            echo "--> Finished processing remote: $remote";
         done
-        echo "--------------------------------------------------"
-        echo "--> All synchronization and cleanup tasks are complete."
+        echo "--------------------------------------------------"; echo "--> All synchronization and cleanup tasks are complete."
     fi
 fi
-
 echo "--> Snapshot process finished."
