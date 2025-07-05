@@ -1,4 +1,4 @@
-k# .github/workflows/generate-checksum.yml
+# .github/workflows/generate-checksum.yml
 
 name: Generate and Commit Checksum
 
@@ -42,7 +42,7 @@ jobs:
           # The "!" inverts the exit code, so the block runs if there are changes.
           if ! git diff --staged --quiet; then
             echo "Checksum has changed. Committing and pushing..."
-            git commit -m "chore(ci): Add automated checksum generation"
+            git commit -m "chore(ci): Update echo.sh checksum"
             git push
           else
             echo "Checksum has not changed. No commit needed."
