@@ -267,28 +267,57 @@ done < <(find "$HOME" \( -name "docker-compose.yml" -o -name "docker-compose.yam
 echo ""
 
 # --- Local GC & Remote Sync ---
-RCLONE_REMOTE_NAME=$(select_rclone_remote)
-if [ -n "$RCLONE_REMOTE_NAME" ]; then
-    echo "--> Performing local garbage collection and cloud synchronization..."
-    # GC for system snapshots
-    ls -1t "$SYSTEM_SNAPSHOT_DIR"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
-    rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${RCLONE_REMOTE_NAME}:ECHO/${HOSTNAME}/system/" --log-level INFO
+if ! command -v rclone &> /dev/null; then
+    echo "--> rclone not found. Skipping all cloud sync operations." >&2
+else
+    ALL_REMOTES=$(rclone listremotes | sed 's/://g')
+    if [ -z "$ALL_REMOTES" ]; then
+        echo "--> No rclone remotes configured. Skipping cloud sync." >&2
+    else
+        echo "--> Performing local garbage collection and cloud synchronization for all remotes..."
 
-    # GC and Sync for each project directory
-    for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
-        if [ -d "$project_dir" ]; then
-            project_name=$(basename "$project_dir")
-            echo "--> Syncing project: $project_name"
-            ls -1t "$project_dir"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
-            rclone sync "$project_dir" "${RCLONE_REMOTE_NAME}:ECHO/${HOSTNAME}/projects/${project_name}/" --log-level INFO
-        fi
-    done
-    
-    # Clean up remote trash after sync
-    echo "--> Cleaning up rclone remote trash for ${RCLONE_REMOTE_NAME}..." >&2
-    rclone cleanup "${RCLONE_REMOTE_NAME}:" --log-level INFO
+        # Perform local GC once for all snapshot directories before looping through remotes.
+        echo "--> Performing local garbage collection..."
+        ls -1t "$SYSTEM_SNAPSHOT_DIR"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
+        for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
+            if [ -d "$project_dir" ]; then
+                ls -1t "$project_dir"/*.md 2>/dev/null | tail -n +$(($SNAPSHOT_RETENTION_COUNT + 1)) | xargs -r rm
+            fi
+        done
+        echo "--> Local GC complete."
 
-    echo "--> Synchronization and cleanup complete."
+        # Loop through each configured remote for sync and cleanup operations.
+        for remote in $ALL_REMOTES; do
+            echo "--------------------------------------------------"
+            echo "--> Processing remote: $remote"
+            
+            # Sync system snapshots
+            echo "--> Syncing system snapshots to $remote..."
+            rclone sync "$SYSTEM_SNAPSHOT_DIR/" "${remote}:ECHO/${HOSTNAME}/system/" --log-level INFO
+
+            # Sync each project directory
+            for project_dir in "$PROJECT_SNAPSHOT_DIR_BASE"/*/; do
+                if [ -d "$project_dir" ]; then
+                    project_name=$(basename "$project_dir")
+                    echo "--> Syncing project '$project_name' to remote '$remote'..."
+                    rclone sync "$project_dir" "${remote}:ECHO/${HOSTNAME}/projects/${project_name}/" --log-level INFO
+                fi
+            done
+            
+            # Conditionally clean up the remote's trash
+            # The 'cleanup' command is not supported by all remotes (e.g., standard WebDAV).
+            if [[ "$remote" != "nextcloud" ]]; then
+                echo "--> Cleaning up remote trash for ${remote}..."
+                rclone cleanup "${remote}:" --log-level INFO
+            else
+                echo "--> Skipping cleanup for remote '${remote}' (not supported)."
+            fi
+
+            echo "--> Finished processing remote: $remote"
+        done
+        echo "--------------------------------------------------"
+        echo "--> All synchronization and cleanup tasks are complete."
+    fi
 fi
 
 echo "--> Snapshot process finished."
