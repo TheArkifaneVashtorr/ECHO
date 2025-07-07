@@ -1,0 +1,10 @@
+# ECHO rclone filter rules
+# Janus, 2025-07-06
+
+# Exclude specific sensitive files like SSH keys by name
+- id_ed25519
+- id_ed25519.pub
+
+# Exclude common unwanted files and directories
+- .DS_Store
+- *.pyc

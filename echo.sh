@@ -27,9 +27,10 @@ fi
 # --- End of Autonomous Update Bootstrap ---
 
 
-# ECHO (Executable Contextual Host Output) | Version 6.2 (Cron Log Integration)
+# ECHO (Executable Contextual Host Output) | Version 6.3 (Filter File Integration)
 # ...
 # Change Log:
+#  - v6.3: Integrated rclone filter file to exclude sensitive/problematic files.
 #  - v6.2: Added cron log capture to system JSON snapshot.
 #  - v6.1: Added project directory tree output to JSON snapshot for structural context.
 #  - v6.0: System snapshot is now a structured JSON object.
@@ -165,6 +166,7 @@ else
                     project_name=$(basename "$project_path")
                     echo "--> Syncing project '$project_name' to remote '$remote'...";
                     rclone sync "$project_path" "${remote}:${BUCKET_TO_USE}${HOSTNAME}/projects/${project_name}/" \
+                        --filter-from "${SCRIPT_DIR}/.rclone-filter-file" \
                         --exclude '.git/**' --exclude '*data/**' --exclude 'ECHO_Snapshots/**' \
                         --exclude '*venv/**' --exclude 'node_modules/**' --exclude '__pycache__/**' \
                         --exclude 'cognitive_tier/**' --exclude '**/config.php' --log-level INFO --delete-after;
